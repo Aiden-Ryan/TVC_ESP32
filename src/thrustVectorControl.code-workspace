@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"name": "TVC_ESP32",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"*.py": "python",
+			"*.tpp": "cpp"
+		}
+	}
+}
