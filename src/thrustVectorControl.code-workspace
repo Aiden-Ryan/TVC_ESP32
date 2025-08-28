@@ -1,14 +1,24 @@
 {
-	"folders": [
-		{
-			"name": "TVC_ESP32",
-			"path": ".."
-		}
-	],
-	"settings": {
-		"files.associations": {
-			"*.py": "python",
-			"*.tpp": "cpp"
-		}
-	}
+    "folders": [
+        {
+            "path": ".."
+        },
+        {
+            "name": "MPU_6050 Test Bed",
+            "path": "../../../../../Documents/PlatformIO/Projects/MPU_6050 Test Bed"
+        }
+    ],
+    "settings": {
+        "files.associations": {
+            "*.py": "python",
+            "array": "cpp",
+            "deque": "cpp",
+            "string": "cpp",
+            "unordered_map": "cpp",
+            "unordered_set": "cpp",
+            "vector": "cpp",
+            "string_view": "cpp",
+            "initializer_list": "cpp"
+        }
+    }
 }
