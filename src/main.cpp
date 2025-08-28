@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <EEPROM.h> 
 #include <iostream>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
@@ -8,7 +9,7 @@
 #include <String>
 
 //wiring
-#define loadCellCalibrationPin 17
+// #define loadCellCalibrationPin 17
 #define COUNT_LOW 1800 //0 deg
 #define COUNT_HIGH 8100 //180 deg
 #define SDA 21
@@ -71,6 +72,14 @@ Adafruit_MPU6050 mpu;
 Madgwick filter; 
 HX711_ADC loadCell(loadCell_DOUT_PIN,loadCell_SCK_PIN);
 
+// === State Machine ===
+enum SystemMode {
+  MODE_LOADCELL_CAL,
+  MODE_SERVO_CAL,
+  MODE_IMU_BIAS,
+  MODE_RUN
+};
+
 // === IMU Setup ===
 void initializeIMU()
 {
@@ -90,11 +99,9 @@ Wire.begin(21,22);
   mpu.setGyroRange(MPU6050_RANGE_250_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
 }
-
 inline float dt_seconds(uint32_t now, uint32_t prev) {
     return (float)((uint32_t)(now - prev)) * 1e-6f;
 }
-
 float computePID(float current)
 {
   error = setpoint - current;
@@ -110,7 +117,6 @@ float computePID(float current)
   previousError = error; 
   return output; 
 }
-
 void setServo(float pidOutput)
 {
   float servoAngle = constrain(pidOutput, 10, 170);//fux; 0 is the min, 180 is the max. 
@@ -169,34 +175,44 @@ void IRAM_ATTR controlLoopISR()
   controlFlag  = true;
   ts = micros();
 }
-
 float calibrate(HX711_ADC &loadCell, bool &loadCellCalibrationFlag) {
+  float known_weight = 0;  // in kg
   Serial.println("Starting calibration...");
   Serial.println("Taring... Remove all weight from the scale.");
-
   loadCell.setCalFactor(1.0); // temporarily set to 1.0
   loadCell.tareNoDelay();
-
+  Serial.println("Tare complete.");
   // Wait for tare to complete
-  while (!loadCell.getTareStatus()) {
+  while (!loadCell.getTareStatus()) 
+  {
     loadCell.update();
   }
-
-  Serial.println("Tare complete. Place known weight and press enter to begin calibration.");
+  Serial.println("Enter calibration weight: ");
+  if(Serial.available())
+  {
+    known_weight = Serial.parseFloat();
+    Serial.read();
+  }
+  Serial.println("Press enter key to begin calibration.");
   while (Serial.available() == 0);  // wait for keypress
   Serial.read();  // clear buffer
-
   Serial.println("Stabilizing reading...");
   for (int i = 0; i < 50; i++) loadCell.update();
   loadCell.refreshDataSet();  // ensures fresh average
-
-  float known_weight = 10.0;  // in kg
-  newCalFactor += loadCell.getNewCalibration(known_weight);
-
+  newCalFactor = loadCell.getNewCalibration(known_weight);
   Serial.print("New calibration factor: ");
   Serial.println(newCalFactor, 5);
-
   loadCell.setCalFactor(newCalFactor);
+  Serial.println("Would you like to store this value in EEPROM (y/n)?"); 
+  if(Serial.available())
+  {
+    String test = Serial.readStringUntil('\n');
+    Serial.println("if you're reading this the code works"); 
+  }
+  else
+  {
+    Serial.println("it didn't work");
+  }
   Serial.println("Calibration complete. Press any key to continue.");
   while (Serial.available() == 0);
   Serial.read();
@@ -205,22 +221,65 @@ float calibrate(HX711_ADC &loadCell, bool &loadCellCalibrationFlag) {
   return newCalFactor;
 }
 
-// === State Machine ===
-enum SystemMode {
-  MODE_LOADCELL_CAL,
-  MODE_SERVO_CAL,
-  MODE_IMU_BIAS,
-  MODE_RUN
-};
 
 SystemMode mode = MODE_LOADCELL_CAL;  // start here
 
-void setup(void) {
-  Serial.begin(115200);
+void serialCommand()
+{
+  if (!Serial.available())
+  {
+    String cmd = " ";
+    Serial.println("Enter the mode to start in.");
+    while(Serial.available() == 0)
+    {
+        cmd = Serial.readStringUntil('\n');
+    }
+    cmd.trim();
 
+    if(cmd.equalsIgnoreCase("loadcal"))
+    {
+      mode = MODE_LOADCELL_CAL;
+      Serial.println("Switched to Load Cell Calibration"); 
+    }
+    else if (cmd.equalsIgnoreCase("servocal")) {
+      mode = MODE_SERVO_CAL;
+      Serial.println("Switched to Servo Calibration");
+    }
+    else if (cmd.equalsIgnoreCase("bias")) {
+      mode = MODE_IMU_BIAS;
+      Serial.println("Switched to IMU Bias Calibration");
+    }
+    else if (cmd.equalsIgnoreCase("run")) {
+      mode = MODE_RUN;
+      Serial.println("Switched to RUN mode");
+    }
+    else if (cmd.startsWith("kp ")) {
+      Kp = cmd.substring(3).toFloat();
+      Serial.print("New Kp = "); Serial.println(Kp);
+    }
+    else if (cmd.startsWith("kd ")) {
+      Kd = cmd.substring(3).toFloat();
+      Serial.print("New Kd = "); Serial.println(Kd);
+    }
+    else if (cmd.startsWith("ki ")) {
+      Ki = cmd.substring(3).toFloat();
+      Serial.print("New Ki = "); Serial.println(Ki);
+    }
+    else {
+      Serial.print("Unknown command: "); Serial.println(cmd);
+    }
+  }
+}
+
+
+
+void setup(void) {
+
+  Serial.begin(115200);
+  serialCommand();
   // Init hardware
   loadCell.begin();
-  pinMode(loadCellCalibrationPin, INPUT); 
+  // pinMode(loadCellCalibrationPin, INPUT); 
   ledcSetup(PWMChannel, PWMFrequency, PWMResolution);
   ledcAttachPin(servoPin, PWMChannel);
   ledcWrite(PWMChannel, (COUNT_HIGH-COUNT_LOW)/2);
@@ -233,6 +292,7 @@ void setup(void) {
 }
 
 void loop() {
+
   switch (mode) {
     case MODE_LOADCELL_CAL: {
       if (!loadCellCalibrationFlag) {
@@ -291,76 +351,3 @@ void loop() {
     }
   }
 }
-// void setup(void)
-// {
-//   Serial.begin(115200);
-
-//   //initialize load cell config
-//   loadCell.begin();
-//   pinMode(loadCellCalibrationPin, INPUT); 
-//   while (loadCellCalibrationFlag == false) //only run once
-//   {
-//     if(digitalRead(loadCellCalibrationPin) == LOW)
-//     {
-//       loadCellCalibrationFlag = false;
-//     }
-//     calibrate(loadCell, loadCellCalibrationFlag);
-//   }  
-
-//   //initialize IMU and Servo
-  
-//   // initializeIMU();
-//   ledcSetup(PWMChannel, PWMFrequency, PWMResolution);        // 50 Hz, 16-bit; 50 Hz is servo standard. 16 bit is the PWM resolution
-//   ledcAttachPin(servoPin, PWMChannel);  // pin, channel
-//   ledcWrite(PWMChannel, (COUNT_HIGH-COUNT_LOW)/2);
-//   servoRawCount(); // temp
-//   //Begin ISR
-//   My_timer = timerBegin(0,80, true); //arg 1 is the number of timer, arg 2 is the value of the prescaler, last one is a flag fi the c ounter should count up (true) or down (false)
-//   timerAttachInterrupt(My_timer, &controlLoopISR, true); 
-//   timerAlarmWrite(My_timer, 20000, true); //runs ISR every 20 ms or 50 Hz
-//   timerAlarmEnable(My_timer); 
-// }
-
-// void loop()
-// {
-//   if (loadCell.update()){
-//   weight = loadCell.getData();
-//   }
-//   if (controlFlag) //is true from ISR
-//   {
-//     controlFlag = false;
-//     sensors_event_t a, g, t;
-//     if(!biasFlag)
-//     {
-//       Serial.println("Calibrating Bias...");
-//       double biasSum = 0;
-//       for(int i =0; i < 500; i ++)
-//       {
-//         mpu.getEvent(&a, &g, &t);
-//         biasSum += g.gyro.z;
-//         delay(2);
-//       }
-//       bias = biasSum/500;
-//       Serial.print("Bias: "); Serial.println(bias, 6);
-//       biasFlag = true;
-//       while (Serial.available() == 0);
-//       while(!servoCal)
-//       { 
-//         servoRawCount();
-    
-//       }
-//     }
-//     mpu.getEvent(&a, &g, &t);
-
-//     // bias = 0;
-//     float dt = dt_seconds(ts, t0);
-//     t0 = ts;
-//     theta_i += (g.gyro.z - bias)* dt;            // integrate yaw
-//     previousTheta = theta_i;
-//     theta_i = theta_i;
-
-//     // Serial.println(theta_i*180/3.14);
-//     float u = computePID(theta_i*rad2Deg);       // uses dt internally
-//     setServo(u);                
-//   }
-// }
